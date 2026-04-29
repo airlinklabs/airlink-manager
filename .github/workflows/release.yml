@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Typecheck (backend)
+        run: bun tsc --noEmit
+
+      - name: Typecheck (frontend)
+        run: bun tsc --noEmit
+        working-directory: frontend
+
+      - name: Run tests
+        run: bun test
+
+      - name: Build frontend
+        run: bun run build
+        working-directory: frontend
+
+      - name: Compile — linux-x64
+        run: |
+          bun build \
+            --compile \
+            --minify \
+            --target=bun-linux-x64 \
+            --asset-naming="[name].[ext]" \
+            ./src/index.ts \
+            --outfile dist/airlink-linux-x64
+
+      - name: Compile — linux-arm64
+        run: |
+          bun build \
+            --compile \
+            --minify \
+            --target=bun-linux-arm64 \
+            --asset-naming="[name].[ext]" \
+            ./src/index.ts \
+            --outfile dist/airlink-linux-arm64
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum airlink-linux-x64 airlink-linux-arm64 > checksums.txt
+          cat checksums.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 1
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+
+      - name: Extract version
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag to generate a diff
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found — listing all commits"
+            COMMITS=$(git log --pretty=format:"- %s (%h)" HEAD)
+          else
+            echo "Comparing $PREV_TAG → ${GITHUB_REF_NAME}"
+            COMMITS=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD)
+          fi
+
+          # Write to file so we can use multiline in GitHub output
+          {
+            echo "## What's changed"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo '```bash'
+            echo "# x86-64"
+            echo "curl -Lo airlink https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/airlink-linux-x64"
+            echo "chmod +x airlink && sudo mv airlink /usr/local/bin/airlink"
+            echo ""
+            echo "# arm64"
+            echo "curl -Lo airlink https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/airlink-linux-arm64"
+            echo "chmod +x airlink && sudo mv airlink /usr/local/bin/airlink"
+            echo '```'
+            echo ""
+            echo "After installing, run \`sudo airlink install\` to complete setup."
+            echo ""
+            echo "## Checksums (SHA-256)"
+            echo ""
+            echo '```'
+            cat dist/checksums.txt
+            echo '```'
+          } > release_notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Airlink Manager ${{ steps.version.outputs.tag }} (beta)
+          body_path: release_notes.md
+          prerelease: true
+          files: |
+            dist/airlink-linux-x64
+            dist/airlink-linux-arm64
+            dist/checksums.txt
+          fail_on_unmatched_files: true
