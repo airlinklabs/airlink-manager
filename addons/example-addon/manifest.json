@@ -1,0 +1,9 @@
+{
+  "id": "example-addon",
+  "name": "Example Addon",
+  "version": "1.0.0",
+  "author": "Airlink",
+  "entrypoint": "index.ts",
+  "permissions": ["metrics.read", "notifications.write"],
+  "nav": [{ "label": "Example", "path": "/addons/example-addon", "icon": "Puzzle" }]
+}
