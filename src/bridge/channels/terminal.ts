@@ -1,12 +1,26 @@
 import os from "node:os";
-import pty from "node-pty";
+import type * as ptyModule from "node-pty";
 import type { DaemonFrame } from "../../shared/types.ts";
 import { validatePositiveInt } from "../../shared/validate.ts";
 import type { ChannelHandler, BridgeContext } from "../index.ts";
 import { BaseChannel, payloadObject } from "./helpers.ts";
 
+let pty: typeof ptyModule | null = null;
+
+async function getPty() {
+  if (pty === null) {
+    try {
+      pty = await import("node-pty");
+    } catch (err) {
+      console.error("Failed to load node-pty module:", err);
+      throw new Error("Terminal channel is not available: node-pty module could not be loaded");
+    }
+  }
+  return pty;
+}
+
 export class TerminalChannel extends BaseChannel implements ChannelHandler {
-  private terminal: pty.IPty | null = null;
+  private terminal: any | null = null;
   private readonly buffer: string[] = [];
 
   constructor(context: BridgeContext) {
@@ -18,21 +32,23 @@ export class TerminalChannel extends BaseChannel implements ChannelHandler {
     const cols = typeof payload.cols === "number" ? validatePositiveInt(payload.cols, "cols", 400) : 80;
     const rows = typeof payload.rows === "number" ? validatePositiveInt(payload.rows, "rows", 200) : 24;
     const shell = await detectShell();
-    this.terminal = pty.spawn(shell, [], {
+    
+    const ptyMod = await getPty();
+    this.terminal = ptyMod.spawn(shell, [], {
       name: "xterm-256color",
       cols,
       rows,
       cwd: process.env.HOME ?? os.homedir(),
       env: { ...process.env, TERM: "xterm-256color" }
     });
-    this.terminal.onData((data) => {
+    this.terminal.onData((data: string) => {
       this.buffer.push(data);
       if (this.buffer.length > 1000) {
         this.buffer.shift();
       }
       this.emitData(frame, data);
     });
-    this.terminal.onExit(({ exitCode }) => this.exit(frame, exitCode));
+    this.terminal.onExit(({ exitCode }: {exitCode: number}) => this.exit(frame, exitCode));
     this.ready(frame);
     if (this.buffer.length > 0) {
       this.emitData(frame, this.buffer.join(""));

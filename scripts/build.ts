@@ -49,4 +49,7 @@ await run([
   "dist/airlink-linux-arm64"
 ]);
 
+console.info("==> Bundling node_modules for runtime fallback...");
+await run(["cp", "-r", "node_modules", "dist/"]);
+
 console.info("==> Build complete. Binaries in dist/");

@@ -37,6 +37,22 @@ export async function runInstall(): Promise<void> {
   await Bun.spawn(["chmod", "600", AIRLINK_PATHS.dbPath], { stdout: "ignore", stderr: "ignore" }).exited;
 
   await writeFile(AIRLINK_PATHS.systemdUnit, systemdUnit(), { mode: 0o644 });
+  
+  // Copy the binary to /usr/local/bin/airlink
+  // argv[0] is the program invocation name (e.g., "./dist/airlink-linux-arm64" or "sudo ./dist/airlink-linux-arm64")
+  const binaryPath = process.argv[0];
+  if (binaryPath && !binaryPath.includes("/proc") && !binaryPath.includes("bunfs")) {
+    try {
+      const binName = binaryPath.split("/").pop() || "airlink";
+      // For relative paths, we need to resolve them first  
+      const absolutePath = binaryPath.startsWith("/") ? binaryPath : `${process.cwd()}/${binaryPath}`;
+      await Bun.spawn(["cp", absolutePath, "/usr/local/bin/airlink"], { stdout: "inherit", stderr: "inherit" }).exited;
+      await Bun.spawn(["chmod", "+x", "/usr/local/bin/airlink"], { stdout: "inherit", stderr: "inherit" }).exited;
+    } catch (err) {
+      console.warn("Could not copy binary to /usr/local/bin/airlink:", err);
+    }
+  }
+  
   await Bun.spawn(["systemctl", "daemon-reload"], { stdout: "inherit", stderr: "inherit" }).exited;
   await Bun.spawn(["systemctl", "enable", "--now", "airlink"], { stdout: "inherit", stderr: "inherit" }).exited;
   const hostname = (await Bun.file("/proc/sys/kernel/hostname").text()).trim();
