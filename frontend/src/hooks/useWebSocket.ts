@@ -3,6 +3,23 @@ import { useAuthStore } from "../store/auth.store.ts";
 import { useNotifyStore } from "../store/notify.store.ts";
 
 type Status = "idle" | "connecting" | "open" | "closed";
+type MessageListener = (data: Record<string, unknown>) => void;
+
+// Global singleton WS + listener registry so terminal panes can subscribe
+const listeners = new Map<string, Set<MessageListener>>();
+let globalWs: WebSocket | null = null;
+
+export function subscribeChannel(channelId: string, fn: MessageListener): () => void {
+  if (!listeners.has(channelId)) listeners.set(channelId, new Set());
+  listeners.get(channelId)!.add(fn);
+  return () => listeners.get(channelId)?.delete(fn);
+}
+
+export function sendWsMessage(value: unknown): void {
+  if (globalWs?.readyState === WebSocket.OPEN) {
+    globalWs.send(JSON.stringify(value));
+  }
+}
 
 export function reconnectDelay(attempt: number): number {
   const base = Math.min(30_000, 1000 * 2 ** attempt);
@@ -35,21 +52,27 @@ export function useWebSocket() {
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${proto}://${window.location.host}/ws?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
+      globalWs = ws;
       ws.addEventListener("open", () => {
         attempt = 0;
         setStatus("open");
         heartbeat = window.setInterval(() => ws.send(JSON.stringify({ type: "ping" })), 30_000);
       });
       ws.addEventListener("message", (event) => {
-        const data = JSON.parse(String(event.data)) as { type?: string; level?: "info" | "success" | "warning" | "error"; message?: string };
+        const data = JSON.parse(String(event.data)) as Record<string, unknown>;
         if (data.type === "notification" && data.level && data.message) {
-          notify(data.level, data.message);
+          notify(data.level as "info" | "success" | "warning" | "error", data.message as string);
+        }
+        // Route to per-channel listeners
+        if (typeof data.channelId === "string") {
+          listeners.get(data.channelId)?.forEach((fn) => fn(data));
         }
       });
       ws.addEventListener("close", () => {
         if (heartbeat !== null) {
           window.clearInterval(heartbeat);
         }
+        if (globalWs === ws) globalWs = null;
         setStatus("closed");
         if (!stopped && attempt < 10) {
           window.setTimeout(connect, reconnectDelay(attempt));
