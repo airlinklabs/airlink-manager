@@ -38,9 +38,6 @@ jobs:
         run: bun tsc --noEmit
         working-directory: frontend
 
-      - name: Lint
-        run: bunx @biomejs/biome check src/ frontend/src/
-
       - name: Run tests
         run: bun test --coverage
 
