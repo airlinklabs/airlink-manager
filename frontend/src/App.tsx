@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "./components/shell/Layout.tsx";
 import { ToastContainer } from "./components/ui/ToastContainer.tsx";
@@ -12,8 +12,9 @@ import { SettingsPage } from "./components/pages/settings/SettingsPage.tsx";
 import { AccountPage } from "./components/pages/account/AccountPage.tsx";
 import { LoginPage } from "./components/pages/auth/LoginPage.tsx";
 import { AddonPage } from "./components/pages/addons/AddonPage.tsx";
-import { useMe } from "./api/auth.ts";
+import { useMe, useWsToken } from "./api/auth.ts";
 import { useAuthStore } from "./store/auth.store.ts";
+import { useWebSocket } from "./hooks/useWebSocket.ts";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,13 +36,25 @@ export default function App() {
 function AppShell() {
   const [path, setPath] = useState(window.location.pathname);
   const user = useAuthStore((state) => state.user);
+  const wsToken = useAuthStore((state) => state.wsToken);
   const me = useMe();
+  const { mutate: loadWsToken } = useWsToken();
+  const { status: wsStatus } = useWebSocket();
+  const hasFetchedWsToken = useRef(false);
 
   useEffect(() => {
     const listener = () => setPath(window.location.pathname);
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
   }, []);
+
+  useEffect(() => {
+    if (!user || wsToken || hasFetchedWsToken.current) {
+      return;
+    }
+    hasFetchedWsToken.current = true;
+    loadWsToken();
+  }, [loadWsToken, user, wsToken]);
 
   const navigate = (next: string) => {
     window.history.pushState({}, "", next);
@@ -57,6 +70,9 @@ function AppShell() {
   return (
     <Layout currentPath={path} navigate={navigate}>
       {page}
+      <div className="fixed bottom-4 right-4 rounded-full bg-[var(--theme-bg-card)] px-3 py-2 text-xs text-[var(--theme-text-body)] shadow-card">
+        WebSocket: {wsStatus}
+      </div>
     </Layout>
   );
 }

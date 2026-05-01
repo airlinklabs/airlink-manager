@@ -4,17 +4,24 @@ import type { Role } from "./types.ts";
 export const VERSION = "1.0.0";
 export const DEFAULT_PORT = 9090;
 
+const AIRLINK_ETC_DIR = process.env.AIRLINK_ETC_DIR ?? "/etc/airlink";
+const AIRLINK_DATA_DIR = process.env.AIRLINK_DATA_DIR ?? "/var/lib/airlink";
+const AIRLINK_TLS_DIR = process.env.AIRLINK_TLS_DIR ?? path.join(AIRLINK_ETC_DIR, "tls");
+const AIRLINK_DB_PATH = process.env.AIRLINK_DB_PATH ?? path.join(AIRLINK_DATA_DIR, "db.sqlite");
+const AIRLINK_SIGNING_KEY = process.env.AIRLINK_SIGNING_KEY ?? path.join(AIRLINK_ETC_DIR, "signing.key");
+const AIRLINK_SYSTEMD_UNIT = process.env.AIRLINK_SYSTEMD_UNIT ?? path.join(AIRLINK_ETC_DIR, "systemd", "airlink.service");
+
 export const AIRLINK_PATHS = {
-  etcDir: "/etc/airlink",
-  tlsDir: "/etc/airlink/tls",
-  tlsKey: "/etc/airlink/tls/key.pem",
-  tlsCert: "/etc/airlink/tls/cert.pem",
-  signingKey: "/etc/airlink/signing.key",
-  dataDir: "/var/lib/airlink",
-  avatarDir: "/var/lib/airlink/avatars",
-  addonDir: "/var/lib/airlink/addons",
-  dbPath: "/var/lib/airlink/db.sqlite",
-  systemdUnit: "/etc/systemd/system/airlink.service"
+  etcDir: AIRLINK_ETC_DIR,
+  tlsDir: AIRLINK_TLS_DIR,
+  tlsKey: path.join(AIRLINK_TLS_DIR, "key.pem"),
+  tlsCert: path.join(AIRLINK_TLS_DIR, "cert.pem"),
+  signingKey: AIRLINK_SIGNING_KEY,
+  dataDir: AIRLINK_DATA_DIR,
+  avatarDir: process.env.AIRLINK_AVATAR_DIR ?? path.join(AIRLINK_DATA_DIR, "avatars"),
+  addonDir: process.env.AIRLINK_ADDON_DIR ?? path.join(AIRLINK_DATA_DIR, "addons"),
+  dbPath: AIRLINK_DB_PATH,
+  systemdUnit: AIRLINK_SYSTEMD_UNIT
 } as const;
 
 export const COOKIE_NAMES = {
@@ -70,11 +77,27 @@ export const MUTATING_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 
 /** Absolute path to the running binary.
  * When compiled with `bun build --compile`, argv[1] is the binary.
- * When run as `bun src/index.ts` in dev, argv[1] ends in .ts - fall back to execPath. */
+ * When run as `bun src/index.ts` in dev, argv[1] ends in .ts - fall back to execPath.
+ * Note: Bun's virtual filesystem (/$bunfs/) is not accessible to child processes,
+ * so we use the environment override AIRLINK_BINARY_PATH if available, then fall back to argv[0]. */
 export const SELF_BINARY_PATH: string = (() => {
+  // Allow explicit override via environment variable
+  if (process.env.AIRLINK_BINARY_PATH) {
+    return process.env.AIRLINK_BINARY_PATH;
+  }
+  
   const argv1 = process.argv[1] ?? "";
+  
+  // If argv[1] is a virtual Bun filesystem path, use argv[0] (bun executable)
+  if (argv1.startsWith("/$bunfs/")) {
+    return process.argv[0] ?? process.execPath;
+  }
+  
+  // If argv[1] is a valid binary path (not .ts/.js), use it
   if (argv1.length > 0 && !argv1.endsWith(".ts") && !argv1.endsWith(".js")) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }
-  return process.execPath;
+  
+  // Default fallback: use argv[0] (usually bun executable in dev)
+  return process.argv[0] ?? process.execPath;
 })();

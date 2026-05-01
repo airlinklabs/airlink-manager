@@ -5,18 +5,21 @@ import { defineConfig } from "vite";
 import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+const backendUrl = process.env.BACKEND_URL ?? "http://localhost:9090";
+const backendWs = backendUrl.replace(/^http/, "ws");
+
 export default defineConfig({
   plugins: [tailwindUtilities(), react()],
   server: {
     port: 5173,
     proxy: {
       "/api": {
-        target: "https://localhost:9090",
+        target: backendUrl,
         changeOrigin: true,
         secure: false
       },
       "/ws": {
-        target: "wss://localhost:9090",
+        target: backendWs,
         ws: true,
         changeOrigin: true,
         secure: false
@@ -52,11 +55,23 @@ function tailwindUtilities(): Plugin {
         base: root,
         from: id,
         async loadStylesheet(specifier, base) {
-          const stylesheet = specifier === "tailwindcss"
-            ? path.join(root, "node_modules", "tailwindcss", "index.css")
-            : specifier.startsWith("tailwindcss/")
-              ? path.join(root, "node_modules", `${specifier}.css`)
-              : path.resolve(base, specifier);
+          let stylesheet: string;
+          
+          // Handle tailwindcss imports
+          if (specifier === "tailwindcss") {
+            stylesheet = path.join(root, "node_modules", "tailwindcss", "index.css");
+          } else if (specifier.startsWith("tailwindcss/")) {
+            stylesheet = path.join(root, "node_modules", `${specifier}.css`);
+          }
+          // Handle external npm packages like @xterm/xterm/css/xterm.css
+          else if (specifier.startsWith("@") || (!/^[./]/.test(specifier))) {
+            stylesheet = path.join(root, "node_modules", specifier);
+          }
+          // Handle relative imports
+          else {
+            stylesheet = path.resolve(base, specifier);
+          }
+          
           return { content: await readFile(stylesheet, "utf8"), base: path.dirname(stylesheet) };
         }
       });

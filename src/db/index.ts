@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { mkdir } from "node:fs/promises";
+import pathLib from "node:path";
 import { AIRLINK_PATHS } from "../shared/constants.ts";
 import { Queries } from "./queries.ts";
 
@@ -104,6 +106,7 @@ CREATE TRIGGER IF NOT EXISTS prevent_audit_update
 BEGIN SELECT RAISE(ABORT, 'audit log is immutable'); END;`;
 
 export async function createDatabase(path = AIRLINK_PATHS.dbPath): Promise<{ db: AirlinkDatabase; queries: Queries }> {
+  await mkdir(pathLib.dirname(path), { recursive: true });
   const db = new Database(path, { create: true, strict: true });
   applyPragmas(db);
   db.exec(EMBEDDED_SCHEMA);

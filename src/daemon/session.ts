@@ -111,7 +111,20 @@ export class SessionManager {
       uid,
       gid
     };
-    const bridgeProc = Bun.spawn([SELF_BINARY_PATH, "--bridge", `--uid=${uid}`, `--gid=${gid}`], spawnOptions);
+    
+    // Determine the spawn arguments based on whether we're in dev or production
+    let spawnArgs: string[];
+    const argv1 = process.argv[1] ?? "";
+    
+    if (argv1.endsWith(".ts") || argv1.endsWith(".js")) {
+      // Dev mode: need to pass both the script and the command
+      spawnArgs = [SELF_BINARY_PATH, argv1, "--bridge", `--uid=${uid}`, `--gid=${gid}`];
+    } else {
+      // Production mode (compiled binary): just pass the command
+      spawnArgs = [SELF_BINARY_PATH, "--bridge", `--uid=${uid}`, `--gid=${gid}`];
+    }
+    
+    const bridgeProc = Bun.spawn(spawnArgs, spawnOptions);
     const bridge: BridgeProcess = {
       process: bridgeProc,
       writer: bridgeProc.stdin,

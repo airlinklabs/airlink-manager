@@ -8,6 +8,7 @@ type MessageListener = (data: Record<string, unknown>) => void;
 // Global singleton WS + listener registry so terminal panes can subscribe
 const listeners = new Map<string, Set<MessageListener>>();
 let globalWs: WebSocket | null = null;
+const pendingMessages: unknown[] = [];
 
 export function subscribeChannel(channelId: string, fn: MessageListener): () => void {
   if (!listeners.has(channelId)) listeners.set(channelId, new Set());
@@ -18,7 +19,10 @@ export function subscribeChannel(channelId: string, fn: MessageListener): () => 
 export function sendWsMessage(value: unknown): void {
   if (globalWs?.readyState === WebSocket.OPEN) {
     globalWs.send(JSON.stringify(value));
+    return;
   }
+
+  pendingMessages.push(value);
 }
 
 export function reconnectDelay(attempt: number): number {
@@ -57,6 +61,10 @@ export function useWebSocket() {
         attempt = 0;
         setStatus("open");
         heartbeat = window.setInterval(() => ws.send(JSON.stringify({ type: "ping" })), 30_000);
+        while (pendingMessages.length > 0) {
+          const payload = pendingMessages.shift();
+          if (payload) ws.send(JSON.stringify(payload));
+        }
       });
       ws.addEventListener("message", (event) => {
         const data = JSON.parse(String(event.data)) as Record<string, unknown>;

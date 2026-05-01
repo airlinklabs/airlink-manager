@@ -34,14 +34,20 @@ export function useTerminal(channelId: string) {
       terminal.loadAddon(new links.WebLinksAddon());
       terminal.open(containerRef.current);
       fitAddon.fit();
+      terminal.focus();
 
-      // Open terminal channel via bridge
-      sendWsMessage({
-        type: "channel.open",
-        channelId,
-        channel: "terminal",
-        payload: { cols: terminal.cols, rows: terminal.rows },
-      });
+      let opened = false;
+      const openChannel = () => {
+        if (opened) return;
+        opened = true;
+        sendWsMessage({
+          type: "channel.open",
+          channelId,
+          channel: "terminal",
+          payload: { cols: terminal.cols, rows: terminal.rows }
+        });
+      };
+      openChannel();
 
       // Subscribe to server messages for this channel
       const unsub = subscribeChannel(channelId, (msg) => {
@@ -75,7 +81,9 @@ export function useTerminal(channelId: string) {
       cleanupFn = () => {
         unsub();
         ro.disconnect();
-        sendWsMessage({ type: "channel.close", channelId });
+        if (opened) {
+          sendWsMessage({ type: "channel.close", channelId });
+        }
         setConnected(channelId, false);
         terminal.dispose();
       };
