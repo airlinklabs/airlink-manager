@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Role } from "./types.ts";
 
 export const VERSION = "1.0.0";
@@ -32,7 +33,8 @@ export const CONFIG_KEYS = {
   addonSigningPubkey: "addon_signing_pubkey",
   fileEditMinRole: "file_edit_min_role",
   chownMinRole: "chown_min_role",
-  appSecret: "app_secret"
+  appSecret: "app_secret",
+  strictSessionBinding: "strict_session_binding"
 } as const;
 
 export const ROLE_HIERARCHY: Record<Role, number> = {
@@ -65,3 +67,14 @@ export const SAME_ORIGIN_CORS_HEADERS = {
 } as const;
 
 export const MUTATING_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
+
+/** Absolute path to the running binary.
+ * When compiled with `bun build --compile`, argv[1] is the binary.
+ * When run as `bun src/index.ts` in dev, argv[1] ends in .ts - fall back to execPath. */
+export const SELF_BINARY_PATH: string = (() => {
+  const argv1 = process.argv[1] ?? "";
+  if (argv1.length > 0 && !argv1.endsWith(".ts") && !argv1.endsWith(".js")) {
+    return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
+  }
+  return process.execPath;
+})();

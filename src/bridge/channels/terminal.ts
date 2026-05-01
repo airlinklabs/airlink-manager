@@ -39,7 +39,19 @@ export class TerminalChannel extends BaseChannel implements ChannelHandler {
       cols,
       rows,
       cwd: process.env.HOME ?? os.homedir(),
-      env: { ...process.env, TERM: "xterm-256color" }
+      env: {
+        TERM: "xterm-256color",
+        LANG: process.env.LANG ?? "en_US.UTF-8",
+        LC_ALL: process.env.LC_ALL ?? "en_US.UTF-8",
+        HOME: process.env.HOME ?? "",
+        USER: process.env.USER ?? "",
+        LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "",
+        PATH: process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        SHELL: process.env.SHELL ?? "/bin/bash",
+        COLORTERM: "truecolor",
+        ...(process.env.DISPLAY ? { DISPLAY: process.env.DISPLAY } : {}),
+        ...(process.env.WAYLAND_DISPLAY ? { WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY } : {})
+      }
     });
     this.terminal.onData((data: string) => {
       this.buffer.push(data);

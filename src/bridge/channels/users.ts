@@ -20,14 +20,23 @@ export class UsersChannel extends BaseChannel implements ChannelHandler {
           .filter(Boolean)
           .map((line) => {
             const [username, , uid, gid, gecos, home, shell] = line.split(":");
-            return { username, uid: Number(uid), gid: Number(gid), gecos, home, shell };
+            const uidN = Number(uid);
+            if (uidN > 0 && uidN < 1000 && !["root", "nobody"].includes(username ?? "")) {
+              return null;
+            }
+            return { username, uid: uidN, gid: Number(gid), gecos, home, shell };
           })
+          .filter(Boolean)
       });
       this.exit(frame, 0);
       return;
     }
     const username = validateUsername(payload.username);
-    const command = action === "lock" ? ["usermod", "-L", username] : action === "unlock" ? ["usermod", "-U", username] : null;
+    const command = action === "lock"
+      ? ["sudo", "-n", "usermod", "-L", username]
+      : action === "unlock"
+        ? ["sudo", "-n", "usermod", "-U", username]
+        : null;
     if (!command) {
       throw new Error("unsupported user action");
     }

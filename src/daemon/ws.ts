@@ -1,6 +1,7 @@
 import type { ServerWebSocket, SessionManager } from "./session.ts";
 import type { ClientMessage, DaemonFrame, WebSession } from "../shared/types.ts";
 import { CHANNEL_TYPES } from "../shared/types.ts";
+import { ROLE_HIERARCHY } from "../shared/constants.ts";
 import { verifyWsToken } from "./auth.ts";
 import type { Queries } from "../db/queries.ts";
 
@@ -24,19 +25,36 @@ export async function authenticateWsRequest(request: Request, deps: WsDeps): Pro
 }
 
 export function handleWsMessage(session: WebSession, socket: ServerWebSocket, data: string | Buffer, deps: WsDeps): void {
-  const message = parseClientMessage(data);
-  if (message.type === "ping") {
-    socket.send(JSON.stringify({ type: "pong" }));
-    return;
+  try {
+    const message = parseClientMessage(data);
+    if (message.type === "ping") {
+      socket.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+    if (message.type === "pong") {
+      return;
+    }
+    if (message.type === "channel.open" && message.channel === "users") {
+      const role = deps.queries.roleFor(session.unix_username);
+      if (ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin) {
+        socket.send(JSON.stringify({
+          type: "channel.error",
+          channelId: message.channelId,
+          message: "Insufficient role for this channel",
+          code: "PERMISSION_DENIED"
+        }));
+        return;
+      }
+    }
+    const frame: DaemonFrame = clientMessageToFrame(message);
+    deps.sessions.sendToBridge(session.id, frame).catch((error: unknown) => {
+      const text = error instanceof Error ? error.message : "bridge unavailable";
+      socket.send(JSON.stringify({ type: "channel.error", channelId: frame.id, message: text, code: "BRIDGE_UNAVAILABLE" }));
+    });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : "invalid message";
+    socket.send(JSON.stringify({ type: "error", message: text, code: "PARSE_ERROR" }));
   }
-  if (message.type === "pong") {
-    return;
-  }
-  const frame: DaemonFrame = clientMessageToFrame(message);
-  deps.sessions.sendToBridge(session.id, frame).catch((error: unknown) => {
-    const text = error instanceof Error ? error.message : "bridge unavailable";
-    socket.send(JSON.stringify({ type: "channel.error", channelId: frame.id, message: text, code: "BRIDGE_UNAVAILABLE" }));
-  });
 }
 
 function parseClientMessage(data: string | Buffer): ClientMessage {

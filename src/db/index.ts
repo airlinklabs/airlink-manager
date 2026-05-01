@@ -28,6 +28,7 @@ INSERT OR IGNORE INTO app_config VALUES ('addon_signing_pubkey', '');
 INSERT OR IGNORE INTO app_config VALUES ('file_edit_min_role', 'user');
 INSERT OR IGNORE INTO app_config VALUES ('chown_min_role', 'owner');
 INSERT OR IGNORE INTO app_config VALUES ('app_secret', '');
+INSERT OR IGNORE INTO app_config VALUES ('strict_session_binding', '1');
 
 CREATE TABLE IF NOT EXISTS web_sessions (
   id              TEXT PRIMARY KEY,

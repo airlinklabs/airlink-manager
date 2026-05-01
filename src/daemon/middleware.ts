@@ -74,14 +74,15 @@ export const securityHeaders = () =>
       [
         "default-src 'self'",
         `script-src 'self' 'nonce-${nonce}'`,
-        "style-src 'self' 'unsafe-inline'",
+        `style-src 'self' 'nonce-${nonce}'`,
         "connect-src 'self' wss:",
         "img-src 'self' data: blob:",
         "font-src 'self'",
         "worker-src 'self' blob:",
         "frame-ancestors 'none'",
         "base-uri 'self'",
-        "form-action 'self'"
+        "form-action 'self'",
+        "upgrade-insecure-requests"
       ].join("; ")
     );
     c.header("X-Frame-Options", "DENY");
@@ -118,8 +119,9 @@ export const sameOriginCors = () =>
 export const rateLimit = (kind: keyof typeof RATE_LIMITS, store = sharedBuckets) =>
   createMiddleware<AirlinkEnv>(async (c, next) => {
     const limit = RATE_LIMITS[kind];
-    const sessionId = getCookie(c, COOKIE_NAMES.session);
-    const key = `${kind}:${sessionId ? `session:${sessionId}` : `ip:${clientIp(c.req.raw)}`}`;
+    const ip = clientIp(c.req.raw);
+    const sessionId = kind !== "auth" ? getCookie(c, COOKIE_NAMES.session) : null;
+    const key = `${kind}:${sessionId ? `session:${sessionId}` : `ip:${ip}`}`;
     const result = store.consumeToken(key, limit.capacity, limit.refillPerSecond);
     c.header("X-RateLimit-Remaining", String(result.remaining));
     if (!result.allowed) {

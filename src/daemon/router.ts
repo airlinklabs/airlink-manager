@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import type { Queries } from "../db/queries.ts";
-import { CONFIG_KEYS, COOKIE_NAMES, VERSION } from "../shared/constants.ts";
+import { CONFIG_KEYS, COOKIE_NAMES, ROLE_HIERARCHY, VERSION } from "../shared/constants.ts";
 import { AppError, PermissionError, ValidationError } from "../shared/errors.ts";
 import type { AirlinkEnv, FeatureFlags, HealthResponse, Role, UserPreference } from "../shared/types.ts";
 import { assertJsonObject, assertString, validateDockerId, validateOctalMode, validatePath, validatePort, validatePositiveInt, validateRole, validateServiceName, validateUsername } from "../shared/validate.ts";
@@ -58,6 +58,7 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
     const timeoutHours = Number(deps.queries.getConfig(CONFIG_KEYS.sessionTimeoutHours) ?? "24");
     const maxAgeSeconds = Math.max(60, Math.floor(timeoutHours * 3600));
     const userAgent = c.req.header("user-agent") ?? "";
+    const strictIp = (deps.queries.getConfig(CONFIG_KEYS.strictSessionBinding) ?? "1") !== "0";
     deps.queries.insertSession([
       sessionId,
       username,
@@ -66,7 +67,7 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
       now,
       ip,
       userAgent,
-      fingerprint(ip, userAgent, deps.appSecret())
+      fingerprint(ip, userAgent, deps.appSecret(), strictIp)
     ]);
     deps.queries.enforceSessionLimit(username, Number(deps.queries.getConfig(CONFIG_KEYS.maxSessionsPerUser) ?? "5"));
     deps.queries.audit(username, "auth.login", { role }, ip, "ok");
@@ -116,6 +117,23 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
     });
   });
 
+  app.get("/api/system/info", async (c) => {
+    const [hostname, osRelease, kernel, uptime] = await Promise.all([
+      Bun.file("/proc/sys/kernel/hostname").text().then((text) => text.trim()).catch(() => "unknown"),
+      Bun.file("/etc/os-release").text().catch(() => ""),
+      Bun.file("/proc/version").text().then((text) => text.trim()).catch(() => "unknown"),
+      Bun.file("/proc/uptime").text().then((text) => Number(text.split(" ")[0] ?? "0")).catch(() => 0)
+    ]);
+    const osName = osRelease.match(/^PRETTY_NAME="(.+)"$/mu)?.[1] ?? "Linux";
+    return c.json({
+      hostname,
+      os: osName,
+      kernel,
+      uptimeSeconds: uptime,
+      serverTime: Date.now()
+    });
+  });
+
   app.patch("/api/account/password", async (c) => {
     const session = c.get("session");
     const body = assertJsonObject(await c.req.json().catch(() => null));
@@ -132,13 +150,14 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
     const proc = Bun.spawn(["chpasswd"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     proc.stdin.write(`${session.unix_username}:${newPassword}\n`);
     proc.stdin.end();
-    const code = await proc.exited;
+    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
     if (code !== 0) {
+      deps.queries.audit(session.unix_username, "account.password_change", { stderr }, clientIp(c.req.raw), "error");
       throw new AppError("Password change failed", "PASSWORD_CHANGE_FAILED", 500);
     }
-    deps.queries.revokeUserSessions(session.unix_username);
-    deps.queries.audit(session.unix_username, "account.password", {}, clientIp(c.req.raw), "ok");
-    return c.json({ ok: true });
+    deps.queries.revokeOtherUserSessions(session.unix_username, session.id);
+    deps.queries.audit(session.unix_username, "account.password_change", {}, clientIp(c.req.raw), "ok");
+    return c.json({ ok: true, reloginRequired: false });
   });
 
   app.get("/api/account/preferences", (c) => {
@@ -315,32 +334,63 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
   });
 
   app.get("/api/sessions", (c) => {
-    const role = c.get("role");
     const session = c.get("session");
-    return c.json({ sessions: deps.queries.listSessions(session.unix_username, role === "admin" || role === "owner") });
+    const sessions = deps.queries.listSessionsForUser(session.unix_username).map((item) => ({
+      id: item.id,
+      createdAt: item.created_at,
+      lastActiveAt: item.last_active_at,
+      expiresAt: item.expires_at,
+      ipAddress: item.ip_address,
+      userAgent: item.user_agent,
+      current: item.id === session.id
+    }));
+    return c.json({ sessions });
   });
   app.delete("/api/sessions/all", (c) => {
-    deps.queries.revokeUserSessions(c.get("session").unix_username);
+    const session = c.get("session");
+    deps.queries.revokeOtherUserSessions(session.unix_username, session.id);
     return c.json({ ok: true });
   });
   app.delete("/api/sessions/:id", (c) => {
-    deps.queries.revokeSession(c.req.param("id"));
+    const session = c.get("session");
+    const role = c.get("role");
+    const targetId = c.req.param("id");
+    const target = deps.queries.findSessionAny(targetId);
+    if (!target) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    const isOwn = target.unix_username === session.unix_username;
+    const isAdmin = ROLE_HIERARCHY[role] >= ROLE_HIERARCHY.admin;
+    if (!isOwn && !isAdmin) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    deps.queries.revokeSession(targetId);
+    deps.queries.audit(session.unix_username, "session.revoke", { targetSessionId: targetId }, clientIp(c.req.raw), "ok");
     return c.json({ ok: true });
   });
 
-  app.get("/api/settings", requireRole("owner"), (c) => c.json({ settings: deps.queries.listConfig() }));
+  app.get("/api/settings", requireRole("admin"), (c) => {
+    const config: Record<string, string> = {};
+    for (const key of publicConfigKeys) {
+      config[key] = deps.queries.getConfig(key) ?? "";
+    }
+    return c.json({ config });
+  });
   app.patch("/api/settings", requireRole("owner"), async (c) => {
     const body = assertJsonObject(await c.req.json().catch(() => null));
-    for (const [key, value] of Object.entries(body)) {
-      if (!allowedSettingKeys.has(key)) {
-        throw new ValidationError(`setting ${key} cannot be changed`);
+    const updates: Record<string, string> = {};
+    for (const key of publicConfigKeys) {
+      if (key in body) {
+        const value = assertString(body[key], key, 256);
+        if (key === CONFIG_KEYS.port) {
+          validatePort(value);
+        }
+        updates[key] = value;
+        deps.queries.setConfig(key, value);
       }
-      if (key === CONFIG_KEYS.port) {
-        validatePort(value);
-      }
-      deps.queries.setConfig(key, String(value));
     }
-    return c.json({ ok: true });
+    deps.queries.audit(c.get("session").unix_username, "settings.update", { keys: Object.keys(updates) }, clientIp(c.req.raw), "ok");
+    return c.json({ ok: true, updated: Object.keys(updates) });
   });
   app.get("/api/settings/audit", requireRole("owner"), (c) => {
     const limit = Math.min(100, validatePositiveInt(c.req.query("limit") ?? "50", "limit", 100));
@@ -361,7 +411,7 @@ export function createRouter(deps: RouterDeps): Hono<AirlinkEnv> {
   return app;
 }
 
-const allowedSettingKeys = new Set<string>([
+const publicConfigKeys = [
   CONFIG_KEYS.appName,
   CONFIG_KEYS.port,
   CONFIG_KEYS.sessionTimeoutHours,
@@ -369,8 +419,9 @@ const allowedSettingKeys = new Set<string>([
   CONFIG_KEYS.allowRegistration,
   CONFIG_KEYS.addonNetworkAllowed,
   CONFIG_KEYS.fileEditMinRole,
-  CONFIG_KEYS.chownMinRole
-]);
+  CONFIG_KEYS.chownMinRole,
+  CONFIG_KEYS.strictSessionBinding
+] as const;
 
 function featureGate(available: boolean, reason: string) {
   return createMiddleware<AirlinkEnv>(async (c, next) => {

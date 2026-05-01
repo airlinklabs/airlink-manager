@@ -57,6 +57,7 @@ export type ServerMessage =
   | { type: "channel.exit"; channelId: string; code: number }
   | { type: "channel.error"; channelId: string; message: string; code?: string }
   | { type: "notification"; id: string; level: NotificationLevel; message: string }
+  | { type: "error"; message: string; code?: string }
   | { type: "ping" }
   | { type: "pong" };
 
@@ -145,7 +146,7 @@ export type MetricsSnapshot = {
     swapTotal: number;
     swapFree: number;
   };
-  disk: { mount: string; total: number; used: number; available: number }[];
+  disk: Array<{ mount: string; total: number; used: number; free: number; usedPercent: number }>;
   network: { iface: string; rxBytesPerSecond: number; txBytesPerSecond: number }[];
   load: [number, number, number];
   uptimeSeconds: number;

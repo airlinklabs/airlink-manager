@@ -1,4 +1,5 @@
 import type { BridgeFrame, DaemonFrame, ServerMessage, WebSession } from "../shared/types.ts";
+import { SELF_BINARY_PATH } from "../shared/constants.ts";
 import { encodeFrame, readFrameLines } from "../bridge/protocol.ts";
 import { log } from "./logger.ts";
 
@@ -14,6 +15,8 @@ export type ManagedSession = {
   bridge: BridgeProcess | null;
   sockets: Set<ServerWebSocket>;
   lastActivity: number;
+  uid: number;
+  gid: number;
 };
 
 export type ServerWebSocket = {
@@ -36,7 +39,9 @@ export class SessionManager {
       session,
       bridge: null,
       sockets: new Set(),
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
+      uid: 0,
+      gid: 0
     };
     this.sessions.set(session.id, created);
     return created;
@@ -44,6 +49,8 @@ export class SessionManager {
 
   async ensureBridge(session: WebSession, uid: number, gid: number): Promise<BridgeProcess> {
     const managed = this.get(session);
+    managed.uid = uid;
+    managed.gid = gid;
     if (managed.bridge && !managed.bridge.degraded) {
       return managed.bridge;
     }
@@ -104,15 +111,15 @@ export class SessionManager {
       uid,
       gid
     };
-    const process = Bun.spawn([processExecPath(), "--bridge", `--uid=${uid}`, `--gid=${gid}`], spawnOptions);
+    const bridgeProc = Bun.spawn([SELF_BINARY_PATH, "--bridge", `--uid=${uid}`, `--gid=${gid}`], spawnOptions);
     const bridge: BridgeProcess = {
-      process,
-      writer: process.stdin,
+      process: bridgeProc,
+      writer: bridgeProc.stdin,
       restarts,
       degraded: false
     };
 
-    readFrameLines(process.stdout, (frame) => {
+    readFrameLines(bridgeProc.stdout, (frame) => {
       this.broadcast(managed, bridgeFrameToServerMessage(frame));
     }).catch((error: unknown) => {
       if (error instanceof Error) {
@@ -120,7 +127,7 @@ export class SessionManager {
       }
     });
 
-    new Response(process.stderr).text().then((stderr) => {
+    new Response(bridgeProc.stderr).text().then((stderr) => {
       if (stderr.trim().length > 0) {
         log("warn", "bridge stderr", { sessionId: managed.session.id, stderr: stderr.slice(0, 2048) });
       }
@@ -130,7 +137,7 @@ export class SessionManager {
       }
     });
 
-    process.exited.then((code) => {
+    bridgeProc.exited.then((code) => {
       log("warn", "bridge exited", { code, sessionId: managed.session.id });
       this.restartWithBackoff(managed, bridge).catch((error: unknown) => {
         if (error instanceof Error) {
@@ -162,9 +169,7 @@ export class SessionManager {
     }
     const delay = Math.min(16_000, 1000 * 2 ** bridge.restarts);
     await Bun.sleep(delay);
-    const uid = Number(managed.session.unix_username);
-    const gid = uid;
-    managed.bridge = await this.spawnBridge(managed, uid, gid, bridge.restarts + 1);
+    managed.bridge = await this.spawnBridge(managed, managed.uid, managed.gid, bridge.restarts + 1);
   }
 
   private broadcast(managed: ManagedSession, message: ServerMessage): void {
@@ -199,8 +204,4 @@ function bridgeFrameToServerMessage(frame: BridgeFrame): ServerMessage {
     return base;
   }
   return { type: "pong" };
-}
-
-function processExecPath(): string {
-  return process.execPath;
 }

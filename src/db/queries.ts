@@ -15,9 +15,11 @@ export class Queries {
   private readonly touchSessionStmt;
   private readonly revokeSessionStmt;
   private readonly revokeUserSessionsStmt;
+  private readonly revokeOtherUserSessionsStmt;
   private readonly listSessionsStmt;
   private readonly listSessionsForUserStmt;
   private readonly deleteOldSessionsStmt;
+  private readonly purgeExpiredSessionsStmt;
   private readonly findRoleStmt;
   private readonly upsertRoleStmt;
   private readonly listRolesStmt;
@@ -46,6 +48,9 @@ export class Queries {
     this.revokeUserSessionsStmt = db.prepare<never, [string]>(
       "UPDATE web_sessions SET revoked = 1 WHERE unix_username = ?"
     );
+    this.revokeOtherUserSessionsStmt = db.prepare<never, [string, string]>(
+      "UPDATE web_sessions SET revoked = 1 WHERE unix_username = ? AND id <> ?"
+    );
     this.listSessionsStmt = db.prepare<WebSession, []>(
       "SELECT * FROM web_sessions WHERE revoked = 0 AND expires_at > unixepoch() ORDER BY last_active_at DESC"
     );
@@ -61,6 +66,9 @@ export class Queries {
          ORDER BY created_at ASC
          LIMIT ?
        )`
+    );
+    this.purgeExpiredSessionsStmt = db.prepare<never, []>(
+      "DELETE FROM web_sessions WHERE revoked = 1 OR expires_at < unixepoch()"
     );
     this.findRoleStmt = db.prepare<WebRole, [string]>("SELECT * FROM web_roles WHERE unix_username = ?");
     this.upsertRoleStmt = db.prepare<never, UpsertRoleArgs>(
@@ -121,6 +129,10 @@ export class Queries {
     this.revokeUserSessionsStmt.run(username);
   }
 
+  revokeOtherUserSessions(username: string, keepSessionId: string): void {
+    this.revokeOtherUserSessionsStmt.run(username, keepSessionId);
+  }
+
   listSessions(username: string | null, includeAll: boolean): WebSession[] {
     if (includeAll) {
       return this.listSessionsStmt.all();
@@ -131,11 +143,20 @@ export class Queries {
     return this.listSessionsForUserStmt.all(username);
   }
 
+  listSessionsForUser(username: string): WebSession[] {
+    return this.listSessionsForUserStmt.all(username);
+  }
+
   enforceSessionLimit(username: string, maxSessions: number): void {
     const overflow = Math.max(0, this.listSessionsForUserStmt.all(username).length - maxSessions);
     if (overflow > 0) {
       this.deleteOldSessionsStmt.run(username, overflow);
     }
+  }
+
+  purgeExpiredSessions(): number {
+    const result = this.purgeExpiredSessionsStmt.run() as { changes?: number };
+    return result.changes ?? 0;
   }
 
   findRole(username: string): WebRole | null {

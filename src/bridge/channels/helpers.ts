@@ -1,4 +1,4 @@
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DaemonFrame, FileEntry } from "../../shared/types.ts";
 import { ValidationError } from "../../shared/errors.ts";
@@ -44,7 +44,17 @@ export async function readSafeFile(rawPath: unknown, maxBytes: number): Promise<
 export async function writeSafeFile(rawPath: unknown, content: unknown): Promise<void> {
   const safe = validatePath(assertString(rawPath, "path", 4096), allowedRoot());
   const text = assertString(content, "content", 10 * 1024 * 1024);
-  await writeFile(safe, text, { mode: 0o600 });
+  let originalMode = 0o600;
+  try {
+    const info = await stat(safe);
+    originalMode = info.mode & 0o7777;
+  } catch {
+    // New files default to private user-only permissions.
+  }
+  const tmpPath = `${safe}.airlink-tmp-${crypto.randomUUID()}`;
+  await writeFile(tmpPath, text, { mode: originalMode });
+  await chmod(tmpPath, originalMode);
+  await rename(tmpPath, safe);
 }
 
 export async function listSafeDirectory(rawPath: unknown): Promise<FileEntry[]> {

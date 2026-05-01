@@ -42,7 +42,7 @@ export class MetricsChannel extends BaseChannel implements ChannelHandler {
       ts: Date.now(),
       cpu: this.parseCpu(stat),
       memory: parseMemory(meminfo),
-      disk: [],
+      disk: await this.parseDisk(),
       network: await this.parseNetwork(),
       load: parseLoad(loadavg),
       uptimeSeconds: Number(uptime.split(/\s+/u)[0] ?? "0"),
@@ -67,6 +67,29 @@ export class MetricsChannel extends BaseChannel implements ChannelHandler {
     const idleDelta = idle - prevIdle;
     const totalPercent = totalDelta <= 0 ? 0 : Math.round(((totalDelta - idleDelta) / totalDelta) * 1000) / 10;
     return { totalPercent, perCore: [] };
+  }
+
+  private async parseDisk(): Promise<{ mount: string; total: number; used: number; free: number; usedPercent: number }[]> {
+    const proc = Bun.spawn(
+      ["df", "-B1", "--output=target,size,used,avail,pcent", "-x", "tmpfs", "-x", "devtmpfs"],
+      { stdin: "ignore", stdout: "pipe", stderr: "ignore" }
+    );
+    const text = await new Response(proc.stdout).text();
+    await proc.exited;
+    return text
+      .split("\n")
+      .slice(1)
+      .filter(Boolean)
+      .map((line) => {
+        const cols = line.trim().split(/\s+/u);
+        const mount = cols[0] ?? "/";
+        const total = Number(cols[1] ?? "0");
+        const used = Number(cols[2] ?? "0");
+        const free = Number(cols[3] ?? "0");
+        const pct = Number((cols[4] ?? "0%").replace("%", ""));
+        return { mount, total, used, free, usedPercent: Number.isNaN(pct) ? 0 : pct };
+      })
+      .filter((entry) => entry.total > 0);
   }
 
   private async parseNetwork(): Promise<{ iface: string; rxBytesPerSecond: number; txBytesPerSecond: number }[]> {

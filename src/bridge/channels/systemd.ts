@@ -15,13 +15,22 @@ export class SystemdChannel extends BaseChannel implements ChannelHandler {
       await this.run(frame, ["systemctl", "list-units", "--type=service", "--all", "--output=json"]);
       return;
     }
+    if (action === "status") {
+      const service = validateServiceName(payload.service);
+      await this.run(frame, ["systemctl", "status", service, "--output=json"]);
+      return;
+    }
     const service = validateServiceName(payload.service);
     if (action === "logs") {
       await this.run(frame, ["journalctl", "-u", service, "-n", "200", "--no-pager"]);
       return;
     }
-    if (["start", "stop", "restart", "reload", "enable", "disable", "cat"].includes(action)) {
-      await this.run(frame, ["systemctl", action, service]);
+    if (["start", "stop", "restart", "reload", "enable", "disable"].includes(action)) {
+      await this.run(frame, ["sudo", "-n", "systemctl", action, service]);
+      return;
+    }
+    if (action === "cat") {
+      await this.run(frame, ["systemctl", "cat", service]);
       return;
     }
     throw new Error("unsupported systemd action");

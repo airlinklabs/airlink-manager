@@ -36,6 +36,8 @@ export async function runBridge(argv: string[]): Promise<void> {
     throw new Error(`bridge gid mismatch: expected ${gid}, got ${process.getgid()}`);
   }
 
+  process.env.HOME = await resolveHomeDir(uid);
+
   const writer = Bun.stdout.writer();
   const context: BridgeContext = {
     emit(frame) {
@@ -99,6 +101,20 @@ function createChannel(channel: ChannelType, context: BridgeContext): ChannelHan
     case "users":
       return new UsersChannel(context);
   }
+}
+
+async function resolveHomeDir(uid: number): Promise<string> {
+  const passwd = await Bun.file("/etc/passwd").text().catch(() => "");
+  for (const line of passwd.split("\n")) {
+    const parts = line.split(":");
+    if (Number(parts[2]) === uid && parts[5]) {
+      process.env.USER = parts[0] ?? process.env.USER;
+      process.env.LOGNAME = parts[0] ?? process.env.LOGNAME;
+      process.env.SHELL = parts[6] ?? process.env.SHELL;
+      return parts[5];
+    }
+  }
+  return `/home/${process.env.USER ?? "nobody"}`;
 }
 
 function readNumericArg(argv: string[], name: "--uid" | "--gid"): number {
